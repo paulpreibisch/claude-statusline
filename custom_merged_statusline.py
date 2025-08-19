@@ -144,11 +144,12 @@ def format_tokens(tokens: int) -> str:
     else:
         return str(tokens)
 
-def calculate_cost_from_logs(model_id: str = None, current_dir: str = None) -> tuple[float, int, int]:
-    """Calculate session cost and token usage from logs"""
+def calculate_cost_from_logs(model_id: str = None, current_dir: str = None) -> tuple[float, int, int, str]:
+    """Calculate session cost and token usage from logs, and get last user prompt"""
     total_cost = 0.0
     total_input_tokens = 0
     total_output_tokens = 0
+    last_user_prompt = ""
     
     # Determine the project directory for logs
     project_path = None
@@ -172,9 +173,23 @@ def calculate_cost_from_logs(model_id: str = None, current_dir: str = None) -> t
             if log_files:
                 try:
                     with open(log_files[0], 'r') as f:
-                        for line in f:
+                        lines = f.readlines()
+                        for line in lines:
                             try:
                                 entry = json.loads(line)
+                                
+                                # Get last user prompt
+                                if entry.get("type") == "user" and "message" in entry:
+                                    msg = entry.get("message", {})
+                                    if isinstance(msg, dict) and "content" in msg:
+                                        content = msg.get("content", "")
+                                        if isinstance(content, list) and len(content) > 0:
+                                            text_content = content[0].get("text", "") if isinstance(content[0], dict) else ""
+                                            if text_content:
+                                                last_user_prompt = text_content
+                                        elif isinstance(content, str):
+                                            last_user_prompt = content
+                                
                                 # Handle different log entry formats
                                 if entry.get("type") == "assistant" and "message" in entry:
                                     msg = entry.get("message", {})
@@ -209,10 +224,10 @@ def calculate_cost_from_logs(model_id: str = None, current_dir: str = None) -> t
                 except Exception:
                     pass
                 # If we found data, return it
-                if total_cost > 0:
-                    return total_cost, total_input_tokens, total_output_tokens
+                if total_cost > 0 or last_user_prompt:
+                    return total_cost, total_input_tokens, total_output_tokens, last_user_prompt
     
-    return total_cost, total_input_tokens, total_output_tokens
+    return total_cost, total_input_tokens, total_output_tokens, last_user_prompt
 
 def get_model_short_name(model_name: str) -> str:
     """Get short display name for model from display name"""
@@ -263,8 +278,8 @@ def main():
         # Get git information
         git_branch, has_changes = get_git_info(current_dir)
         
-        # Calculate cost and usage from logs
-        total_cost, input_tokens, output_tokens = calculate_cost_from_logs(model_id, current_dir)
+        # Calculate cost and usage from logs, and get last prompt
+        total_cost, input_tokens, output_tokens, last_prompt = calculate_cost_from_logs(model_id, current_dir)
         total_tokens = input_tokens + output_tokens
         
         # Build status line components
@@ -314,6 +329,13 @@ def main():
             else:
                 # Green for low cost with money emoji
                 components.append(f"💵 {Colors.BRIGHT_GREEN}{cost_str}{Colors.RESET}")
+        
+        # Last conversation/prompt (truncated)
+        if last_prompt:
+            # Get icon for the prompt
+            prompt_icon = get_prompt_icon(last_prompt)
+            truncated_prompt = truncate_prompt(last_prompt, 35)
+            components.append(f"{prompt_icon} {Colors.DIM}{truncated_prompt}{Colors.RESET}")
         
         # Join components with separator
         status_line = " | ".join(components)
